@@ -63,7 +63,7 @@ python -c "import open_clip; model, _, preprocess = open_clip.create_model_and_t
 
 ---
 
-## Phase 1: CartPole Reward Landscape (Day 1)
+## Phase 1: CartPole Reward Landscape
 
 **Goal:** Verify CLIP cosine similarity correlates with ground truth reward.
 No RL training needed — just render frames and compute CLIP rewards.
@@ -80,7 +80,7 @@ No RL training needed — just render frames and compute CLIP rewards.
 
 ---
 
-## Phase 2: MountainCar with Textures (Day 2)
+## Phase 2: MountainCar with Textures
 
 **Goal:** Show that more realistic rendering improves CLIP reward quality.
 
