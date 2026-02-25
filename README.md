@@ -6,6 +6,22 @@ This guide walks through reproducing key results from Rocamonde et al. (ICLR 202
 We build a simplified, single-GPU implementation rather than using the authors' multi-GPU
 Docker/Kubernetes infrastructure.
 
+## Project Structure
+
+```
+vlm_rm_project/
+├── README.md                    # This file
+├── requirements.txt             # Dependencies
+├── src/
+│   ├── vlm_reward.py           # CLIP reward model + goal-baseline regularization
+│   ├── environments.py          # Environment wrappers (textures, camera mods)
+│   ├── train_classic.py         # CartPole / MountainCar experiments
+│   ├── train_humanoid.py        # Humanoid experiments
+│   ├── evaluate.py              # EPIC distance + reward landscape plotting
+└── results/
+    └── plots/
+```
+
 ---
 
 ## Phase 0: Environment Setup
