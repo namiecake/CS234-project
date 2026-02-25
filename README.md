@@ -8,29 +8,6 @@ Docker/Kubernetes infrastructure.
 
 ---
 
-## Project Structure
-
-```
-vlm_rm_project/
-├── README.md                    # This file
-├── requirements.txt             # Dependencies
-├── configs/
-│   ├── cartpole.yaml
-│   ├── mountaincar.yaml
-│   └── humanoid_kneel.yaml
-├── src/
-│   ├── vlm_reward.py           # CLIP reward model + goal-baseline regularization
-│   ├── environments.py          # Environment wrappers (textures, camera mods)
-│   ├── train_classic.py         # CartPole / MountainCar experiments
-│   ├── train_humanoid.py        # Humanoid experiments
-│   ├── evaluate.py              # EPIC distance + reward landscape plotting
-│   └── utils.py                 # Rendering, logging helpers
-└── results/
-    └── plots/
-```
-
----
-
 ## Phase 0: Environment Setup
 
 ### Option A: Local machine with GPU (recommended for CartPole/MountainCar)
