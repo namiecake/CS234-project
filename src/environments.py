@@ -7,11 +7,52 @@ Handles:
   - Modified Humanoid textures and camera (Section 4.3, Figure 3)
 """
 
+import os
+import math
+
 import gymnasium as gym
 import numpy as np
 import mujoco
 from typing import Optional, Tuple
 from PIL import Image
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MountainCar coordinate constants (matching Gymnasium's rendering)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_MC_MIN_X = -1.2
+_MC_MAX_X = 0.6
+_MC_SCREEN_W = 600
+_MC_SCREEN_H = 400
+_MC_SCALE = _MC_SCREEN_W / (_MC_MAX_X - _MC_MIN_X)
+
+_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+_cached_mc_bg: Optional[Image.Image] = None
+_cached_mc_car: Optional[Image.Image] = None
+
+
+def _load_mountain_assets():
+    """Load and cache the mountain background and car sprite images."""
+    global _cached_mc_bg, _cached_mc_car
+    if _cached_mc_bg is None:
+        _cached_mc_bg = Image.open(
+            os.path.join(_DATA_DIR, 'mountain_car_background.png')
+        ).convert('RGBA')
+        _cached_mc_car = Image.open(
+            os.path.join(_DATA_DIR, 'mountain_car.png')
+        ).convert('RGBA')
+    return _cached_mc_bg, _cached_mc_car
+
+
+def _mc_height(x: float) -> float:
+    """MountainCar height function (from Gymnasium source)."""
+    return np.sin(3 * x) * 0.45 + 0.55
+
+
+def _mc_slope(x: float) -> float:
+    """Derivative of the MountainCar height function."""
+    return np.cos(3 * x) * 1.35
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -82,62 +123,58 @@ def render_mountaincar_at_position(
 
     Args:
         position: x position (range roughly [-1.2, 0.6], goal at ~0.5)
-        textured: Whether to apply realistic textures
+        textured: Whether to use photorealistic background with car sprite
         render_size: (width, height)
 
     Returns:
         RGB frame as numpy array (H, W, 3)
     """
+    if textured:
+        return render_textured_mountaincar(position, render_size=render_size)
+
     env = gym.make("MountainCar-v0", render_mode="rgb_array")
     env.reset()
-
-    # Set position and velocity
     env.unwrapped.state = np.array([position, 0.0])
-
     frame = env.render()
     env.close()
-
-    if textured:
-        frame = apply_mountain_texture(frame)
-
     return frame
 
 
-def apply_mountain_texture(frame: np.ndarray) -> np.ndarray:
+def render_textured_mountaincar(
+    position: float,
+    render_size: Tuple[int, int] = (480, 480),
+) -> np.ndarray:
     """
-    Apply a mountain-like texture to the MountainCar rendering.
+    Render MountainCar with a photorealistic mountain background and car sprite.
 
-    The paper shows that adding realistic textures significantly improves
-    CLIP reward quality (Figure 2c vs 2b). This is a simplified version —
-    we overlay a gradient sky and darken the mountain to look more natural.
-
-    For a more faithful reproduction, you could:
-    1. Use a real mountain background image
-    2. Modify the Gymnasium rendering source directly
+    Follows the same rendering logic as the original paper's pygame-based
+    renderer: the car center is placed at the mathematical surface height
+    plus a clearance offset, and rotated to match the slope.
     """
-    h, w, _ = frame.shape
-    textured = frame.copy()
+    bg_orig, car_orig = _load_mountain_assets()
+    bg = bg_orig.copy()
 
-    # Create sky gradient (blue at top, lighter at horizon)
-    for y in range(h):
-        t = y / h  # 0 at top, 1 at bottom
-        if frame[y, :, 1].mean() > 200:  # white/light background pixels
-            sky_r = int(135 + 80 * t)  # gets lighter toward bottom
-            sky_g = int(180 + 40 * t)
-            sky_b = int(235 - 20 * t)
-            mask = (frame[y, :, 0] > 200) & (frame[y, :, 1] > 200) & (frame[y, :, 2] > 200)
-            textured[y, mask, 0] = sky_r
-            textured[y, mask, 1] = sky_g
-            textured[y, mask, 2] = sky_b
+    clearance = 15
+    h = _mc_height(position)
+    angle_deg = math.degrees(math.atan(_mc_slope(position)))
 
-    # Make the mountain area more brown/green (earth-like)
-    # The mountain in default rendering is typically a dark line/region
-    mountain_mask = (frame[:, :, 0] < 100) & (frame[:, :, 1] < 100) & (frame[:, :, 2] < 100)
-    textured[mountain_mask, 0] = 101  # brownish-green
-    textured[mountain_mask, 1] = 120
-    textured[mountain_mask, 2] = 75
+    # Car center in final-image pixel coordinates (y=0 at top).
+    # Matches the original paper's pygame approach: they draw in a y-up
+    # coordinate space at y = clearance + h*scale, then flip the surface.
+    cx = (position - _MC_MIN_X) * _MC_SCALE
+    cy = _MC_SCREEN_H - (clearance + h * _MC_SCALE)
 
-    return textured
+    car_rotated = car_orig.rotate(angle_deg, expand=True, resample=Image.BICUBIC)
+
+    paste_x = int(cx - car_rotated.width / 2)
+    paste_y = int(cy - car_rotated.height / 2)
+
+    bg.paste(car_rotated, (paste_x, paste_y), car_rotated)
+
+    result = bg.convert('RGB')
+    if render_size and render_size != (_MC_SCREEN_W, _MC_SCREEN_H):
+        result = result.resize(render_size, Image.LANCZOS)
+    return np.array(result)
 
 
 def mountaincar_reward_landscape(
