@@ -43,7 +43,7 @@ class CLIPRewardModel:
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
             model_name, pretrained=pretrained
         )
-        self.model = self.model.to(device).eval()
+        self.model = self.model.to(device).half().eval()
         self.tokenizer = open_clip.get_tokenizer(model_name)
 
         # Precompute text embeddings (only need to do this once)
@@ -75,7 +75,7 @@ class CLIPRewardModel:
             Normalized image embeddings of shape (B, D)
         """
         with torch.no_grad():
-            image_embeds = self.model.encode_image(images.to(self.device))
+            image_embeds = self.model.encode_image(images.to(self.device).half())
             image_embeds = F.normalize(image_embeds, dim=-1)
         return image_embeds
 

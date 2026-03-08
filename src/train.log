@@ -2,7 +2,7 @@
 TRAINING: Humanoid - kneeling
   Model: ViT-bigG-14
   Alpha: 0.0
-  Steps: 10,000,000
+  Steps: 10,000
   Seed: 42
 ============================================================
 CLIPRewardModel initialized: ViT-bigG-14 (laion2b_s39b_b160k)
@@ -14,24 +14,117 @@ Wrapping the env with a `Monitor` wrapper
 Wrapping the env in a DummyVecEnv.
 
   Starting training... (this will take a while)
-Logging to results/humanoid_kneeling_ViT-bigG-14_alpha0.0_seed42/tensorboard/SAC_2
+Logging to results/humanoid_kneeling_ViT-bigG-14_alpha0.0_seed42/tensorboard/SAC_5
 ---------------------------------
 | rollout/           |          |
 |    ep_len_mean     | 100      |
-|    ep_rew_mean     | 35.6     |
+|    ep_rew_mean     | 0        |
 | time/              |          |
 |    episodes        | 10       |
-|    fps             | 5        |
-|    time_elapsed    | 169      |
+|    fps             | 42       |
+|    time_elapsed    | 23       |
 |    total_timesteps | 1000     |
 ---------------------------------
+  Step     1000 | Mean CLIP reward (last 10 ep): 0.3556 | Best: 0.3655
 ---------------------------------
 | rollout/           |          |
 |    ep_len_mean     | 100      |
-|    ep_rew_mean     | 35.4     |
+|    ep_rew_mean     | 0        |
 | time/              |          |
 |    episodes        | 20       |
-|    fps             | 5        |
-|    time_elapsed    | 341      |
+|    fps             | 40       |
+|    time_elapsed    | 49       |
 |    total_timesteps | 2000     |
 ---------------------------------
+  Step     2000 | Mean CLIP reward (last 20 ep): 0.3537 | Best: 0.3655
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 30       |
+|    fps             | 39       |
+|    time_elapsed    | 76       |
+|    total_timesteps | 3000     |
+---------------------------------
+  Step     3000 | Mean CLIP reward (last 30 ep): 0.3523 | Best: 0.3655
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 40       |
+|    fps             | 37       |
+|    time_elapsed    | 108      |
+|    total_timesteps | 4000     |
+---------------------------------
+  Step     4000 | Mean CLIP reward (last 40 ep): 0.3529 | Best: 0.3779
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 50       |
+|    fps             | 37       |
+|    time_elapsed    | 133      |
+|    total_timesteps | 5000     |
+---------------------------------
+  Step     5000 | Mean CLIP reward (last 50 ep): 0.3521 | Best: 0.3779
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 60       |
+|    fps             | 37       |
+|    time_elapsed    | 160      |
+|    total_timesteps | 6000     |
+---------------------------------
+  Step     6000 | Mean CLIP reward (last 60 ep): 0.3528 | Best: 0.3779
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 70       |
+|    fps             | 37       |
+|    time_elapsed    | 186      |
+|    total_timesteps | 7000     |
+---------------------------------
+  Step     7000 | Mean CLIP reward (last 70 ep): 0.3531 | Best: 0.3779
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 80       |
+|    fps             | 37       |
+|    time_elapsed    | 212      |
+|    total_timesteps | 8000     |
+---------------------------------
+  Step     8000 | Mean CLIP reward (last 80 ep): 0.3526 | Best: 0.3779
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 90       |
+|    fps             | 37       |
+|    time_elapsed    | 238      |
+|    total_timesteps | 9000     |
+---------------------------------
+  Step     9000 | Mean CLIP reward (last 90 ep): 0.3522 | Best: 0.3782
+---------------------------------
+| rollout/           |          |
+|    ep_len_mean     | 100      |
+|    ep_rew_mean     | 0        |
+| time/              |          |
+|    episodes        | 100      |
+|    fps             | 37       |
+|    time_elapsed    | 264      |
+|    total_timesteps | 10000    |
+---------------------------------
+  Step    10000 | Mean CLIP reward (last 100 ep): 0.3520 | Best: 0.3782
+
+  Training complete in 0.1 hours
+  Saved final model to results/humanoid_kneeling_ViT-bigG-14_alpha0.0_seed42/checkpoints/final_model
