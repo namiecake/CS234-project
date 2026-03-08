@@ -12,8 +12,11 @@ import math
 
 import gymnasium as gym
 import numpy as np
-import mujoco
-from typing import Optional, Tuple
+from gymnasium.envs.mujoco.humanoid_v4 import HumanoidEnv as GymHumanoidEnv
+from gymnasium.envs.mujoco import MujocoEnv
+from gymnasium import utils
+from gymnasium.spaces import Box
+from typing import Any, Dict, Optional, Tuple
 from PIL import Image
 
 
@@ -198,20 +201,114 @@ def mountaincar_reward_landscape(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Humanoid environment with modified textures and camera
+# Humanoid environment with realistic textures and camera
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# Camera config from the original paper's training config (kube/job.yaml).
+# Uses a free camera (camera_id=-1) that tracks the torso body.
+DEFAULT_HUMANOID_CAMERA_CONFIG: Dict[str, Any] = {
+    "trackbodyid": 1,
+    "distance": 3.5,
+    "lookat": np.array([0.0, 0.0, 1.0]),
+    "elevation": -10.0,
+    "azimuth": 180.0,
+}
+
+
+class CLIPRewardedHumanoidEnv(GymHumanoidEnv):
+    """
+    Humanoid environment matching the original VLM-RM paper implementation.
+
+    Textures are handled via a dedicated MuJoCo XML model (humanoid_textured.xml)
+    that references PNG texture files for the skybox, floor, and robot body.
+    Camera is configured via MujocoEnv's default_camera_config with a free camera.
+
+    From the paper (Section 4.3):
+    - Texture change: 36% -> 91% success rate
+    - Texture + camera: 91% -> 100% success rate
+    """
+
+    def __init__(
+        self,
+        episode_length: int = 100,
+        render_mode: str = "rgb_array",
+        forward_reward_weight: float = 1.25,
+        ctrl_cost_weight: float = 0.1,
+        healthy_reward: float = 5.0,
+        healthy_z_range: Tuple[float, float] = (1.0, 2.0),
+        reset_noise_scale: float = 1e-2,
+        exclude_current_positions_from_observation: bool = True,
+        camera_config: Optional[Dict[str, Any]] = None,
+        textured: bool = True,
+        **kwargs,
+    ):
+        terminate_when_unhealthy = False
+        utils.EzPickle.__init__(
+            self,
+            forward_reward_weight,
+            ctrl_cost_weight,
+            healthy_reward,
+            terminate_when_unhealthy,
+            healthy_z_range,
+            reset_noise_scale,
+            exclude_current_positions_from_observation,
+            render_mode=render_mode,
+            **kwargs,
+        )
+
+        self._forward_reward_weight = forward_reward_weight
+        self._ctrl_cost_weight = ctrl_cost_weight
+        self._healthy_reward = healthy_reward
+        self._terminate_when_unhealthy = terminate_when_unhealthy
+        self._healthy_z_range = healthy_z_range
+        self._reset_noise_scale = reset_noise_scale
+        self._exclude_current_positions_from_observation = (
+            exclude_current_positions_from_observation
+        )
+
+        if exclude_current_positions_from_observation:
+            observation_space = Box(
+                low=-np.inf, high=np.inf, shape=(376,), dtype=np.float64
+            )
+        else:
+            observation_space = Box(
+                low=-np.inf, high=np.inf, shape=(378,), dtype=np.float64
+            )
+
+        if textured:
+            model_path = os.path.join(_DATA_DIR, "humanoid_textured.xml")
+        else:
+            model_path = "humanoid.xml"
+
+        MujocoEnv.__init__(
+            self,
+            model_path,
+            5,
+            observation_space=observation_space,
+            default_camera_config=camera_config,
+            render_mode=render_mode,
+            **kwargs,
+        )
+        self.episode_length = episode_length
+        self.num_steps = 0
+        if camera_config:
+            self.camera_id = -1
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        self.num_steps += 1
+        terminated = self.num_steps >= self.episode_length
+        return obs, reward, terminated, truncated, info
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None):
+        self.num_steps = 0
+        return super().reset(seed=seed, options=options)
+
 
 class HumanoidVLMWrapper(gym.Wrapper):
     """
-    Wrapper for Humanoid-v4 that:
-    1. Modifies textures to be more realistic (critical for CLIP, see Figure 3)
-    2. Fixes camera position (slightly angled down, not following agent)
-    3. Renders frames for CLIP reward computation
-    4. Replaces environment reward with CLIP reward
-
-    From the paper (Section 4.3):
-    - Texture change: 36% → 91% success rate
-    - Texture + camera: 91% → 100% success rate
+    Wrapper around CLIPRewardedHumanoidEnv that replaces the environment
+    reward with CLIP reward when a reward_model is provided.
     """
 
     def __init__(
@@ -219,106 +316,28 @@ class HumanoidVLMWrapper(gym.Wrapper):
         reward_model=None,
         render_width: int = 224,
         render_height: int = 224,
-        modify_textures: bool = True,
-        modify_camera: bool = True,
+        textured: bool = True,
+        camera_config: Optional[Dict[str, Any]] = None,
+        episode_length: int = 100,
     ):
-        env = gym.make(
-            "Humanoid-v4",
+        if camera_config is None:
+            camera_config = DEFAULT_HUMANOID_CAMERA_CONFIG
+
+        env = CLIPRewardedHumanoidEnv(
+            episode_length=episode_length,
             render_mode="rgb_array",
+            camera_config=camera_config,
+            textured=textured,
             width=render_width,
             height=render_height,
-            terminate_when_unhealthy=False,  # Paper removes early termination
         )
         super().__init__(env)
-
         self.reward_model = reward_model
-        self.modify_textures = modify_textures
-        self.modify_camera = modify_camera
-        self._render_width = render_width
-        self._render_height = render_height
-        self._textures_modified = False
-
-    def reset(self, **kwargs):
-        obs, info = self.env.reset(**kwargs)
-        self._modify_env()
-        return obs, info
-
-    def _modify_env(self):
-        """Apply texture and camera modifications to the MuJoCo model."""
-        if self._textures_modified:
-            return
-
-        model = self.env.unwrapped.model
-
-        if self.modify_textures:
-            self._apply_realistic_textures(model)
-
-        if self.modify_camera:
-            self._set_fixed_camera(model)
-
-        self._textures_modified = True
-
-    def _apply_realistic_textures(self, model):
-        """
-        Change humanoid and floor textures to be more realistic.
-        The paper emphasizes this is critical for CLIP to interpret the scene.
-
-        We modify:
-        - Humanoid body: more skin-like color
-        - Floor: darker, more realistic ground
-        - Sky/background: natural-looking
-        """
-        # Modify geom RGBA colors
-        # The humanoid has multiple geoms (torso, limbs, etc.)
-        for i in range(model.ngeom):
-            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i)
-            if name and name == "floor":
-                # Make floor a natural dark gray/green
-                model.geom_rgba[i] = [0.3, 0.35, 0.25, 1.0]
-            elif name:
-                # Make humanoid body parts a more realistic grayish color
-                # (the paper uses a humanoid-robot-like appearance)
-                model.geom_rgba[i] = [0.6, 0.6, 0.65, 1.0]
-
-    def _set_fixed_camera(self, model):
-        """
-        Set camera to a fixed position pointing at the agent slightly angled down.
-        The default camera follows the agent, which makes some tasks hard to evaluate.
-        """
-        # We'll use a free camera configuration during rendering
-        # This is applied in the render() override below
-        pass
-
-    def render(self):
-        """Render with fixed camera if enabled."""
-        if self.modify_camera:
-            # Use the MuJoCo viewer's camera settings
-            viewer = self.env.unwrapped.mujoco_renderer
-            if hasattr(viewer, '_get_viewer'):
-                # Set camera to look down slightly at the agent
-                data = self.env.unwrapped.data
-                camera_config = {
-                    "distance": 4.0,
-                    "azimuth": 90,
-                    "elevation": -20,
-                    "lookat": data.qpos[:3].copy(),
-                }
-                # Apply to the camera used for rgb_array rendering
-                try:
-                    cam = viewer.default_cam_config
-                    cam.update(camera_config)
-                except:
-                    pass
-
-        return self.env.render()
 
     def step(self, action):
         obs, original_reward, terminated, truncated, info = self.env.step(action)
-
-        # Store original reward for comparison
         info["original_reward"] = original_reward
 
-        # Compute CLIP reward if reward model is provided
         if self.reward_model is not None:
             frame = self.render()
             if frame is not None:
@@ -332,16 +351,18 @@ class HumanoidVLMWrapper(gym.Wrapper):
 def make_humanoid_env(
     reward_model=None,
     render_size: int = 224,
-    modify_textures: bool = True,
-    modify_camera: bool = True,
+    textured: bool = True,
+    camera_config: Optional[Dict[str, Any]] = None,
+    episode_length: int = 100,
 ):
     """Factory function to create the modified humanoid environment."""
     return HumanoidVLMWrapper(
         reward_model=reward_model,
         render_width=render_size,
         render_height=render_size,
-        modify_textures=modify_textures,
-        modify_camera=modify_camera,
+        textured=textured,
+        camera_config=camera_config,
+        episode_length=episode_length,
     )
 
 

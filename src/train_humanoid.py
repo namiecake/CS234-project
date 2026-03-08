@@ -143,12 +143,9 @@ def make_clip_reward_env(
         reward_model=reward_model,
         render_width=render_size,
         render_height=render_size,
-        modify_textures=True,
-        modify_camera=True,
+        textured=True,
+        episode_length=episode_length,
     )
-
-    # Wrap with time limit matching paper's episode_length=100
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=episode_length)
 
     return env
 
@@ -268,15 +265,14 @@ def evaluate_humanoid(
     # Load model
     model = SAC.load(model_path)
 
-    # Create environment (no CLIP reward needed for eval, just rendering)
-    env = gym.make(
-        "Humanoid-v4",
-        render_mode="rgb_array",
-        width=224,
-        height=224,
-        terminate_when_unhealthy=False,
+    # Create environment with same textures/camera as training (no CLIP reward needed)
+    env = HumanoidVLMWrapper(
+        reward_model=None,
+        render_width=224,
+        render_height=224,
+        textured=True,
+        episode_length=100,
     )
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=100)
 
     # Optionally create CLIP reward model for computing rewards on eval
     task_config = HUMANOID_TASKS[task]
