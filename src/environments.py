@@ -309,6 +309,14 @@ class HumanoidVLMWrapper(gym.Wrapper):
     """
     Wrapper around CLIPRewardedHumanoidEnv that replaces the environment
     reward with CLIP reward when a reward_model is provided.
+
+    Supports two modes:
+      - Per-step (batch_rewards=False): computes CLIP reward on every step.
+        Simple but extremely slow with large models (~5 fps with ViT-bigG-14).
+      - Batched (batch_rewards=True): stores rendered frames and returns a
+        placeholder reward of 0. A callback (BatchedCLIPRewardCallback) later
+        runs CLIP on the full episode in one forward pass and patches the
+        replay buffer. This matches Algorithm 1 from Rocamonde et al.
     """
 
     def __init__(
@@ -319,6 +327,7 @@ class HumanoidVLMWrapper(gym.Wrapper):
         textured: bool = True,
         camera_config: Optional[Dict[str, Any]] = None,
         episode_length: int = 100,
+        batch_rewards: bool = False,
     ):
         if camera_config is None:
             camera_config = DEFAULT_HUMANOID_CAMERA_CONFIG
@@ -333,10 +342,18 @@ class HumanoidVLMWrapper(gym.Wrapper):
         )
         super().__init__(env)
         self.reward_model = reward_model
+        self.batch_rewards = batch_rewards
+        self._frame_buffer: list = []
 
     def step(self, action):
         obs, original_reward, terminated, truncated, info = self.env.step(action)
         info["original_reward"] = original_reward
+
+        if self.batch_rewards:
+            frame = self.render()
+            if frame is not None:
+                self._frame_buffer.append(frame)
+            return obs, 0.0, terminated, truncated, info
 
         if self.reward_model is not None:
             frame = self.render()
@@ -347,6 +364,22 @@ class HumanoidVLMWrapper(gym.Wrapper):
 
         return obs, original_reward, terminated, truncated, info
 
+    def get_and_clear_frames(self) -> np.ndarray:
+        """
+        Return all frames accumulated since the last call and reset the buffer.
+
+        Used by BatchedCLIPRewardCallback to retrieve an episode's worth of
+        frames for batched CLIP inference.
+
+        Returns:
+            np.ndarray of shape (N, H, W, 3) uint8, or empty (0, ...) array.
+        """
+        if not self._frame_buffer:
+            return np.empty((0,), dtype=np.uint8)
+        frames = np.stack(self._frame_buffer)
+        self._frame_buffer = []
+        return frames
+
 
 def make_humanoid_env(
     reward_model=None,
@@ -354,6 +387,7 @@ def make_humanoid_env(
     textured: bool = True,
     camera_config: Optional[Dict[str, Any]] = None,
     episode_length: int = 100,
+    batch_rewards: bool = False,
 ):
     """Factory function to create the modified humanoid environment."""
     return HumanoidVLMWrapper(
@@ -363,6 +397,7 @@ def make_humanoid_env(
         textured=textured,
         camera_config=camera_config,
         episode_length=episode_length,
+        batch_rewards=batch_rewards,
     )
 
 

@@ -80,73 +80,100 @@ HUMANOID_TASKS = {
 }
 
 
-# ─── Custom SAC with batched CLIP rewards ─────────────────────────────────────
+# ─── Batched CLIP reward computation (Algorithm 1) ─────────────────────────────
 
-class CLIPRewardCallback(BaseCallback):
+
+class BatchedCLIPRewardCallback(BaseCallback):
     """
-    Callback that replaces environment rewards with CLIP rewards.
+    Batched CLIP reward computation following Algorithm 1
+    (Rocamonde et al., ICLR 2024, Appendix C).
 
-    The paper computes CLIP rewards in batches for efficiency (Algorithm 1).
-    This callback collects frames during rollout, then batch-computes rewards.
+    During env rollout the wrapper stores raw rendered frames and emits
+    placeholder rewards (0.0).  At the end of each rollout (= one episode
+    when train_freq == episode_length) this callback:
+
+      1. Pulls the buffered frames from the environment wrapper.
+      2. Runs them through CLIP in a single batched forward pass.
+      3. Writes the real rewards back into the SAC replay buffer at the
+         correct positions.
+
+    This turns per-step CLIP inference (~5 fps with ViT-bigG-14) into a
+    single batched call per episode (~50-100+ effective fps).
     """
 
     def __init__(
         self,
         reward_model: CLIPRewardModel,
+        env: HumanoidVLMWrapper,
         log_freq: int = 1000,
-        video_freq: int = 10000,
-        video_dir: str = "results/videos",
+        save_dir: str = "results/checkpoints",
         verbose: int = 0,
     ):
         super().__init__(verbose)
         self.reward_model = reward_model
+        self.env = env
         self.log_freq = log_freq
-        self.video_freq = video_freq
-        self.video_dir = video_dir
-        self.episode_rewards = []
+        self.save_dir = save_dir
+        self.episode_rewards: list = []
         self.best_reward = -float("inf")
+        self._rollout_buffer_start = 0
+
+    def _on_rollout_start(self) -> None:
+        self._rollout_buffer_start = self.model.replay_buffer.pos
 
     def _on_step(self) -> bool:
-        # Log progress
-        if self.num_timesteps % self.log_freq == 0 and self.episode_rewards:
-            mean_reward = np.mean(self.episode_rewards[-100:])
+        return True
+
+    def _on_rollout_end(self) -> None:
+        frames = self.env.get_and_clear_frames()
+        if len(frames) == 0:
+            return
+
+        # --- single batched CLIP forward pass for the whole episode ---
+        rewards = self.reward_model.reward_from_frames(frames)
+
+        # --- retroactively patch the replay buffer ---
+        buffer = self.model.replay_buffer
+        n = len(rewards)
+        positions = (self._rollout_buffer_start + np.arange(n)) % buffer.buffer_size
+        buffer.rewards[positions, 0] = rewards
+
+        # --- logging / checkpointing ---
+        ep_mean = float(np.mean(rewards))
+        self.episode_rewards.append(ep_mean)
+
+        if self.num_timesteps % self.log_freq < n and self.episode_rewards:
+            recent = self.episode_rewards[-100:]
             print(
                 f"  Step {self.num_timesteps:>8d} | "
-                f"Mean CLIP reward (last 100): {mean_reward:.4f} | "
+                f"Mean CLIP reward (last {len(recent)} ep): {np.mean(recent):.4f} | "
                 f"Best: {self.best_reward:.4f}"
             )
 
-            if mean_reward > self.best_reward:
-                self.best_reward = mean_reward
-                # Save best model
-                save_path = os.path.join(self.video_dir, "..", "checkpoints", "best_model")
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                self.model.save(save_path)
-
-        return True
+        if ep_mean > self.best_reward:
+            self.best_reward = ep_mean
+            os.makedirs(self.save_dir, exist_ok=True)
+            self.model.save(os.path.join(self.save_dir, "best_model"))
 
 
 def make_clip_reward_env(
-    reward_model: CLIPRewardModel,
     render_size: int = 224,
     episode_length: int = 100,
 ):
     """
-    Create a humanoid environment that uses CLIP for rewards.
+    Create a humanoid environment configured for batched CLIP rewards.
 
-    Key implementation detail from Algorithm 1:
-    The paper computes CLIP rewards in batches at the end of episodes.
-    For simplicity, we compute per-step here. For efficiency at scale,
-    you'd want to batch frames and compute rewards periodically.
+    The environment renders and buffers frames but does NOT run CLIP itself;
+    BatchedCLIPRewardCallback handles that after the rollout completes.
     """
     env = HumanoidVLMWrapper(
-        reward_model=reward_model,
+        reward_model=None,
         render_width=render_size,
         render_height=render_size,
         textured=True,
         episode_length=episode_length,
+        batch_rewards=True,
     )
-
     return env
 
 
@@ -191,8 +218,9 @@ def train_humanoid(
         **clip_config,
     )
 
-    # Create environment
-    env = make_clip_reward_env(rm, render_size=224, episode_length=100)
+    # Create environment in batched-reward mode: renders + stores frames,
+    # returns placeholder reward=0.  The callback handles CLIP inference.
+    env = make_clip_reward_env(render_size=224, episode_length=100)
 
     # Create output directories
     run_name = f"humanoid_{task}_{model_name}_alpha{alpha}_seed{seed}"
@@ -201,6 +229,7 @@ def train_humanoid(
     os.makedirs(os.path.join(run_dir, "videos"), exist_ok=True)
 
     # Create SAC agent (hyperparameters from Appendix C.2)
+    # train_freq=100 matches episode_length so each rollout = one episode.
     model = SAC(
         "MlpPolicy",
         env,
@@ -216,12 +245,14 @@ def train_humanoid(
         tensorboard_log=os.path.join(run_dir, "tensorboard"),
     )
 
-    # Callback for logging
-    callback = CLIPRewardCallback(
+    # Callback: batched CLIP reward computation (Algorithm 1).
+    # Receives a direct reference to the unwrapped env so it can pull
+    # the frame buffer after each rollout.
+    callback = BatchedCLIPRewardCallback(
         reward_model=rm,
+        env=env,
         log_freq=1000,
-        video_freq=50000,
-        video_dir=os.path.join(run_dir, "videos"),
+        save_dir=os.path.join(run_dir, "checkpoints"),
     )
 
     # Train!
