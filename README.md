@@ -1,162 +1,224 @@
 # Reproducing "Vision-Language Models are Zero-Shot Reward Models for RL"
-## Course Project Guide
+## CS 234 Course Project
 
 ### Overview
-This guide walks through reproducing key results from Rocamonde et al. (ICLR 2024).
-We build a simplified, single-GPU implementation rather than using the authors' multi-GPU
+This project reproduces key results from Rocamonde et al. (ICLR 2024), which
+demonstrates that CLIP cosine similarity can serve as a zero-shot reward signal
+for reinforcement learning — no hand-designed reward functions needed. We build
+a simplified, single-GPU implementation rather than using the authors' multi-GPU
 Docker/Kubernetes infrastructure.
+
+As an extension, we also evaluate **SigLIP2** (ViT-SO400M-14-SigLIP2) as a
+drop-in replacement for the paper's CLIP ViT-bigG-14 reward model, testing
+whether newer and smaller vision-language models improve reward quality.
 
 ## Project Structure
 
 ```
-vlm_rm_project/
-├── README.md                    # This file
-├── requirements.txt             # Dependencies
+CS234-project/
+├── README.md                       # This file
+├── requirements.txt                # Dependencies
+├── data/
+│   └── humanoid_textured.xml       # MuJoCo humanoid model (sky, floor, body textures)
 ├── src/
-│   ├── vlm_reward.py           # CLIP reward model + goal-baseline regularization
-│   ├── environments.py          # Environment wrappers (textures, camera mods)
-│   ├── train_classic.py         # CartPole / MountainCar experiments
-│   ├── train_humanoid.py        # Humanoid experiments
-│   ├── evaluate.py              # EPIC distance + reward landscape plotting
-└── results/
-    └── plots/
+│   ├── vlm_reward.py               # CLIP/SigLIP reward model + goal-baseline regularization
+│   ├── environments.py             # Environment wrappers (textures, camera mods)
+│   ├── train_classic.py            # CartPole / MountainCar reward landscape experiments
+│   ├── train_humanoid.py           # Humanoid SAC training with VLM rewards
+│   ├── evaluate.py                 # EPIC distance + model-scale comparison
+│   └── test_humanoid_setup.py      # Quick sanity check for MuJoCo + CLIP pipeline
+└── results/                        # Training outputs (checkpoints, TensorBoard, videos)
 ```
 
 ---
 
-## Phase 0: Environment Setup
+## Setup
 
-### Option A: Local machine with GPU (recommended for CartPole/MountainCar)
-### Option B: GCP VM with GPU (needed for humanoid with ViT-bigG-14)
+### Prerequisites
 
-For GCP, a single **NVIDIA T4** (~$0.35/hr) works for smaller CLIP models.
-For ViT-bigG-14 you'll want an **A100 40GB** (~$3.67/hr) or **L4** (~$0.70/hr).
+- Python 3.10+
+- A CUDA-capable GPU for humanoid experiments (we use nvidia L4)
+- CPU is sufficient for CartPole/MountainCar reward-landscape experiments with smaller models (RN50)
+
+### Installation
 
 ```bash
-# Create a conda environment
 conda create -n vlmrm python=3.10 -y
 conda activate vlmrm
 
-# Core dependencies
-pip install torch torchvision  # match your CUDA version
-pip install open_clip_torch    # for CLIP models
-pip install gymnasium[mujoco]  # MuJoCo environments
-pip install stable-baselines3  # RL algorithms
-pip install mujoco             # MuJoCo physics engine
-pip install matplotlib numpy scipy pandas
-pip install wandb              # optional, for logging
-pip install Pillow imageio     # for rendering/video
+pip install -r requirements.txt
+# If needed, install a CUDA-matched PyTorch first:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
 
-# Verify MuJoCo works
+### Verify the setup
+
+```bash
+# MuJoCo
 python -c "import gymnasium; env = gymnasium.make('Humanoid-v4'); print('MuJoCo OK')"
 
-# Verify CLIP works
+# CLIP (downloads ~10 GB for ViT-bigG-14 on first run)
 python -c "import open_clip; model, _, preprocess = open_clip.create_model_and_transforms('ViT-bigG-14', pretrained='laion2b_s39b_b160k'); print('CLIP OK')"
+
+# End-to-end pipeline check
+python src/test_humanoid_setup.py
 ```
 
 ---
 
-## Phase 1: CartPole Reward Landscape
+## Experiments
 
-**Goal:** Verify CLIP cosine similarity correlates with ground truth reward.
-No RL training needed — just render frames and compute CLIP rewards.
+### 1. CartPole Reward Landscape
 
-### What to implement:
-1. Render CartPole at different pole angles
-2. Compute CLIP similarity with "pole vertically upright on top of the cart"
-3. Plot reward vs. pole angle (reproduce Figure 2a)
-4. Repeat with goal-baseline regularization at different α values
+Verify that CLIP cosine similarity correlates with ground-truth reward (reproduces Figure 2a).
+No RL training — just render CartPole at different pole angles and plot CLIP reward.
 
-### Expected result:
-- Peak reward at pole angle ≈ 0 (upright)
-- Smooth, well-shaped reward landscape
+```bash
+python src/train_classic.py --experiment cartpole --model RN50
+```
 
----
+**Expected result:** peak reward at pole angle ≈ 0 (upright), smooth landscape.
 
-## Phase 2: MountainCar with Textures
+### 2. MountainCar with Textures
 
-**Goal:** Show that more realistic rendering improves CLIP reward quality.
+Show that more realistic rendering improves CLIP reward quality (reproduces Figures 2b/c).
 
-### What to implement:
-1. Default MountainCar: render at different x positions, compute CLIP reward
-2. Textured MountainCar: add mountain/sky texture, repeat
-3. Compare reward landscapes (reproduce Figures 2b vs 2c)
-4. Train DQN/SAC agents with CLIP reward on both versions
+```bash
+python src/train_classic.py --experiment mountaincar --model RN50
+```
 
-### Key insight to verify:
-- Default rendering → noisy, poorly shaped rewards
-- Textured rendering + regularization → well-shaped, learnable rewards
+**Key finding:** default rendering produces noisy rewards; textured rendering + regularization yields a well-shaped, learnable reward landscape.
 
----
+### 3. Humanoid Tasks (main experiment)
 
-## Phase 3: Humanoid Tasks (Days 3-7)
+Train a MuJoCo humanoid to perform tasks specified only by text prompts, using
+VLM cosine similarity as the sole reward signal.
 
-**Goal:** Train humanoid to kneel, do splits, sit in lotus position using CLIP rewards.
+#### Environment setup
 
-### Environment modifications (critical!):
-1. **Textures:** Change humanoid skin color and background to be more realistic
-2. **Camera:** Fixed position, slightly angled down (not following the agent)
+The humanoid uses a textured MuJoCo XML model (`data/humanoid_textured.xml`)
+with a fixed camera (distance 3.5, elevation −10°, azimuth 180°) — both
+modifications are critical for CLIP to produce usable rewards (Section 4.3).
 
-### Tasks to attempt (in order of expected ease):
-1. **Kneeling** — "a humanoid robot kneeling" (100% success in paper)
-2. **Doing splits** — "a humanoid robot practicing gymnastics, doing the side splits" (100%)
-3. **Lotus position** — "a humanoid robot seated down, meditating in the lotus position" (100%)
+#### Tasks we ran
 
-### Training details (from paper Appendix C.2):
+We ran **kneeling** and **splits** with two VLM backbones:
+
+| Task | VLM Backbone | Pretrained Weights | Paper Success |
+|---|---|---|---|
+| Kneeling | **ViT-bigG-14** | `laion2b_s39b_b160k` | 100% |
+| Splits | **ViT-bigG-14** | `laion2b_s39b_b160k` | 100% |
+| Kneeling | **SigLIP2-SO400M** | `webli` | — (extension) |
+| Splits | **SigLIP2-SO400M** | `webli` | — (extension) |
+
+```bash
+# Kneeling with ViT-bigG-14 (paper baseline)
+python src/train_humanoid.py --task kneeling --model ViT-bigG-14 --total_steps 10000000
+
+# Splits with ViT-bigG-14
+python src/train_humanoid.py --task splits --model ViT-bigG-14 --total_steps 10000000
+
+# Kneeling with SigLIP2 (extension)
+python src/train_humanoid.py --task kneeling --model SigLIP2-SO400M --total_steps 10000000
+
+# Splits with SigLIP2 (extension)
+python src/train_humanoid.py --task splits --model SigLIP2-SO400M --total_steps 10000000
+```
+
+#### Training details (from paper, Appendix C.2)
+
 - Algorithm: SAC
-- Steps: 10M (can try fewer first, e.g., 2-5M, to see if learning signal emerges)
+- Steps: 10M
 - Episode length: 100
 - Learning starts: 50,000 steps
-- SAC updates: 100 every 100 env steps
+- SAC updates: 100 every 100 env steps (train_freq=100, gradient_steps=100)
 - τ = 0.005, γ = 0.95, lr = 6e-4
-- CLIP model: ViT-bigG-14 (critical — smaller models get 0% success)
-- Batch size for CLIP inference: 3200
+- CLIP model: ViT-bigG-14 (~2.5B params, ~10 GB VRAM)
 
-### Compute estimate:
-- With single A100: ~12-24 hours per task per seed
-- With T4: likely too slow for ViT-bigG-14 (model is ~2.5B params)
-- Start with 1 seed, expand to 2-4 if time permits
+Rewards are computed in batched mode (Algorithm 1 from the paper): the
+environment buffers rendered frames during each episode, and a callback runs
+a single CLIP forward pass at the end of each rollout before patching the
+SAC replay buffer.
+
+#### Compute estimate
+
+- Single A100: ~12–24 hours per task per seed
+- T4: likely too slow for ViT-bigG-14
+
+#### Evaluating a trained model
+
+```bash
+python src/train_humanoid.py --eval_only results/<run_dir>/checkpoints/final_model --task kneeling
+```
+
+This renders 20 episodes, computes mean CLIP reward, and saves videos.
+
+### 4. Ablations
+
+#### Goal-Baseline Regularization
+
+The codebase supports goal-baseline regularization (Definition 1 from the paper)
+controlled by the `--alpha` flag. To sweep:
+
+```bash
+for alpha in 0.0 0.25 0.5 0.75 1.0; do
+  python src/train_humanoid.py --task kneeling --alpha $alpha
+done
+```
+
+#### Model Scale Comparison
+
+Compare EPIC distances across model sizes (reproduces Figure 4):
+
+```bash
+python src/evaluate.py --experiment scale
+```
+
+This evaluates RN50, ViT-L-14, ViT-H-14, and ViT-bigG-14 reward quality on
+collected frames.
+
+### 5. Extension: SigLIP2 as a Reward Model
+
+The paper's central claim is that VLM scale drives reward quality — bigger
+models yield better-shaped rewards. We test this by swapping in
+**SigLIP2-SO400M** (ViT-SO400M-14-SigLIP2, pretrained on WebLI), a newer
+vision-language model that did not exist when the paper was written. This
+directly probes whether improvements in VLM architecture and training data
+translate to better zero-shot reward signals.
+
+We ran SigLIP2 on the **kneeling** and **splits** tasks using the same
+hyperparameters as the ViT-bigG-14 experiments.
 
 ---
 
-## Phase 4: Ablations (Days 7-9)
+## Supported VLM Backbones
 
-### 4a: Goal-Baseline Regularization
-- Run kneeling task with α ∈ {0, 0.25, 0.5, 0.75, 1.0}
-- Compute EPIC distance to human labels
-- Reproduce Figure 4a
+All models are loaded via [OpenCLIP](https://github.com/mlfoundations/open_clip):
 
-### 4b: Model Scale (if compute allows)
-- Run kneeling with RN50, ViT-L-14, ViT-H-14, ViT-bigG-14
-- Compare EPIC distances and success rates
-- Reproduce Figure 4b,c
+| Key | Model | Pretrained | Params | Notes |
+|---|---|---|---|---|
+| `RN50` | ResNet-50 | `openai` | 102M | Fast CPU testing |
+| `ViT-L-14` | ViT-L/14 | `laion2b_s32b_b82k` | 428M | Mid-size |
+| `ViT-H-14` | ViT-H/14 | `laion2b_s32b_b79k` | 986M | Large |
+| `ViT-bigG-14` | ViT-bigG/14 | `laion2b_s39b_b160k` | 2.5B | Paper's primary model |
+| `SigLIP2-SO400M` | ViT-SO400M-14-SigLIP2 | `webli` | 400M | Extension model |
 
 ---
 
-## Phase 5: Extension (Days 9-12)
+## Available Humanoid Tasks
 
-### Suggested extensions (pick one):
+From the paper (Table 3). All tasks use baseline prompt *"a humanoid robot"*:
 
-**A. Newer CLIP Models (easiest, most interesting)**
-- Try SigLIP, MetaCLIP, or EVA-CLIP as reward models
-- These didn't exist when the paper was written
-- Directly tests their "scaling hypothesis" — do better VLMs = better rewards?
-- Compare EPIC distances and success rates against ViT-bigG-14
-
-**B. Prompt Sensitivity Analysis**
-- For kneeling task, try 10+ prompt variations:
-  - "a humanoid robot kneeling"
-  - "a robot on its knees"
-  - "kneeling position"
-  - "a person kneeling on the ground"
-  - etc.
-- Measure how reward quality varies with prompt choice
-- Authors claim "no prompt engineering" but never ablate this
-
-**C. New Task**
-- Try a task not in the paper: "a humanoid robot crawling",
-  "a humanoid robot lying down", "a humanoid robot squatting"
-- Report success/failure and analyze why
+| Task | Goal Prompt | Paper Success Rate |
+|---|---|---|
+| `kneeling` | "a humanoid robot kneeling" | 100% |
+| `splits` | "a humanoid robot practicing gymnastics, doing the side splits" | 100% |
+| `lotus` | "a humanoid robot seated down, meditating in the lotus position" | 100% |
+| `standing` | "a humanoid robot standing up" | 100% |
+| `arms_raised` | "a humanoid robot standing up, with both arms raised" | 100% |
+| `hands_on_hips` | "a humanoid robot standing up with hands on hips" | 64% |
+| `arms_crossed` | "a humanoid robot standing up, with its arms crossed" | 0% |
+| `one_leg` | "a humanoid robot standing up on one leg" | 0% |
 
 ---
 
