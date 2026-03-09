@@ -1,5 +1,5 @@
-# Reproducing "Vision-Language Models are Zero-Shot Reward Models for RL"
-## CS 234 Course Project
+### CS 234 Course Project
+#### Reproducing "Vision-Language Models are Zero-Shot Reward Models for RL": https://arxiv.org/abs/2310.12921
 
 ### Overview
 This project reproduces key results from Rocamonde et al. (ICLR 2024), which
@@ -34,29 +34,42 @@ CS234-project/
 
 ## Setup
 
-### Prerequisites
+We use an Nvidia L4 GPU on Google Cloud Platform. Any CUDA-capable GPU is required for humanoid experiments.
 
-- Python 3.10+
-- A CUDA-capable GPU for humanoid experiments (we use nvidia L4)
-- CPU is sufficient for CartPole/MountainCar reward-landscape experiments with smaller models (RN50)
-
-### Installation
+### GCP Installation
 
 ```bash
+# Verify GPU is visible
+nvidia-smi
+
+# Create conda environment
 conda create -n vlmrm python=3.10 -y
 conda activate vlmrm
 
-pip install -r requirements.txt
-# If needed, install a CUDA-matched PyTorch first:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Install dependencies
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install open_clip_torch gymnasium[mujoco] mujoco stable-baselines3
+pip install matplotlib numpy scipy Pillow imageio imageio-ffmpeg wandb pygame transformers setuptools tensorboard
+
+# Need to use EGL for rendering with Mujoco
+export MUJOCO_GL=egl
+echo "export MUJOCO_GL=egl" >> ~/.bashrc
+source ~/.bashrc
+
+# Clone this repo!
+git clone https://github.com/namiecake/CS234-project.git
 ```
 
 ### Verify the setup
 
 ```bash
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python -c "import open_clip; print('OpenCLIP OK')"
 # MuJoCo
 python -c "import gymnasium; env = gymnasium.make('Humanoid-v4'); print('MuJoCo OK')"
+# the last command will say it's using an older version - that's okay because that's the one the paper uses
 
+# less required:
 # CLIP (downloads ~10 GB for ViT-bigG-14 on first run)
 python -c "import open_clip; model, _, preprocess = open_clip.create_model_and_transforms('ViT-bigG-14', pretrained='laion2b_s39b_b160k'); print('CLIP OK')"
 
@@ -66,25 +79,25 @@ python src/test_humanoid_setup.py
 
 ---
 
-## Experiments
+## Experiments Conducted
 
 ### 1. CartPole Reward Landscape
 
 Verify that CLIP cosine similarity correlates with ground-truth reward (reproduces Figure 2a).
-No RL training — just render CartPole at different pole angles and plot CLIP reward.
+Render CartPole at different pole angles and plot CLIP reward. (no RL training)
 
 ```bash
-python src/train_classic.py --experiment cartpole --model RN50
+python train_classic.py --experiment cartpole --model ViT-bigG-14
 ```
 
 **Expected result:** peak reward at pole angle ≈ 0 (upright), smooth landscape.
 
-### 2. MountainCar with Textures
+### 2. MountainCar with Textures (RN50)
 
 Show that more realistic rendering improves CLIP reward quality (reproduces Figures 2b/c).
 
 ```bash
-python src/train_classic.py --experiment mountaincar --model RN50
+python src/train_classic.py --experiment mountaincar --model ViT-bigG-14
 ```
 
 **Key finding:** default rendering produces noisy rewards; textured rendering + regularization yields a well-shaped, learnable reward landscape.
@@ -100,6 +113,8 @@ The humanoid uses a textured MuJoCo XML model (`data/humanoid_textured.xml`)
 with a fixed camera (distance 3.5, elevation −10°, azimuth 180°) — both
 modifications are critical for CLIP to produce usable rewards (Section 4.3).
 
+We implemented these modifications ourselves using texture assets found in the author's repo.
+
 #### Tasks we ran
 
 We ran **kneeling** and **splits** with two VLM backbones:
@@ -111,18 +126,33 @@ We ran **kneeling** and **splits** with two VLM backbones:
 | Kneeling | **SigLIP2-SO400M** | `webli` | — (extension) |
 | Splits | **SigLIP2-SO400M** | `webli` | — (extension) |
 
+#### example tmux setup:
+```bash
+# make a new tmux session
+tmux new -s training
+
+# for later checking on progress: tmux attach -t training
+
+conda activate vlmrm   # don't forget this!
+cd ~/CS234-project/src
+tensorboard --logdir ~/CS234-project/src/results/ --port 6006 --bind_all & # it's ok if this isn't working
+
+python train_humanoid.py --task kneeling --model SigLIP2-SO400M --total_steps 5000000 2>&1 | tee train_siglip.log &
+```
+
+##### Commands ran:
 ```bash
 # Kneeling with ViT-bigG-14 (paper baseline)
-python src/train_humanoid.py --task kneeling --model ViT-bigG-14 --total_steps 10000000
+python train_humanoid.py --task kneeling --model ViT-bigG-14 --total_steps 10000000
 
 # Splits with ViT-bigG-14
-python src/train_humanoid.py --task splits --model ViT-bigG-14 --total_steps 10000000
+python train_humanoid.py --task splits --model ViT-bigG-14 --total_steps 10000000
 
 # Kneeling with SigLIP2 (extension)
-python src/train_humanoid.py --task kneeling --model SigLIP2-SO400M --total_steps 10000000
+python train_humanoid.py --task kneeling --model SigLIP2-SO400M --total_steps 10000000
 
 # Splits with SigLIP2 (extension)
-python src/train_humanoid.py --task splits --model SigLIP2-SO400M --total_steps 10000000
+python train_humanoid.py --task splits --model SigLIP2-SO400M --total_steps 10000000
 ```
 
 #### Training details (from paper, Appendix C.2)
@@ -140,20 +170,18 @@ environment buffers rendered frames during each episode, and a callback runs
 a single CLIP forward pass at the end of each rollout before patching the
 SAC replay buffer.
 
-#### Compute estimate
-
-- Single A100: ~12–24 hours per task per seed
-- T4: likely too slow for ViT-bigG-14
-
 #### Evaluating a trained model
 
 ```bash
 python src/train_humanoid.py --eval_only results/<run_dir>/checkpoints/final_model --task kneeling
+
+for kneeling:
+python train_humanoid.py --eval_only results/humanoid_kneeling_ViT-bigG-14_alpha0.0_seed42/checkpoints/best_model --task kneeling --model ViT-bigG-14
 ```
 
-This renders 20 episodes, computes mean CLIP reward, and saves videos.
+This renders 100 episodes, computes mean CLIP reward, and saves videos. We downloaded the videos and manually labelled whether or not the humanoid achieves the task in the video, following the human-evaluation method in the paper. If the humanoid is completing the task for more than 50% of the video, then we count it as successful.
 
-### 4. Ablations
+### 4. Additional Notes: Ablations
 
 #### Goal-Baseline Regularization
 
