@@ -281,7 +281,7 @@ def evaluate_humanoid(
     model_path: str,
     task: str = "kneeling",
     clip_model_name: str = "ViT-bigG-14",
-    n_episodes: int = 20,
+    n_episodes: int = 100,
     save_video: bool = True,
     output_dir: str = "results/eval",
 ):
@@ -342,7 +342,7 @@ def evaluate_humanoid(
         print(f"  Episode {ep+1}/{n_episodes}: mean CLIP reward = {mean_r:.4f}")
 
         # Save video for first few episodes
-        if save_video and ep < 5:
+        if save_video and ep < 100:
             import imageio
             video_path = os.path.join(output_dir, f"episode_{ep}.mp4")
             imageio.mimsave(video_path, episode_frames, fps=30)
