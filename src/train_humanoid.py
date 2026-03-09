@@ -342,7 +342,7 @@ def evaluate_humanoid(
         print(f"  Episode {ep+1}/{n_episodes}: mean CLIP reward = {mean_r:.4f}")
 
         # Save video for first few episodes
-        if save_video and ep < 100:
+        if save_video and ep < n_episodes:
             import imageio
             video_path = os.path.join(output_dir, f"episode_{ep}.mp4")
             imageio.mimsave(video_path, episode_frames, fps=30)
@@ -371,6 +371,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="results")
     parser.add_argument("--eval_only", type=str, default=None,
                         help="Path to saved model to evaluate (skip training)")
+    parser.add_argument("--n_episodes", type=int, default=100, help="Number of evaluation episodes")
 
     args = parser.parse_args()
 
@@ -379,6 +380,7 @@ if __name__ == "__main__":
             model_path=args.eval_only,
             task=args.task,
             clip_model_name=args.model,
+            n_episodes=args.n_episodes,
         )
     else:
         train_humanoid(
