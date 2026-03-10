@@ -175,12 +175,16 @@ def compute_epic_distance(
     Returns:
         EPIC distance (lower = better; 0 = perfect agreement)
     """
-    # Pearson correlation
+    # Pearson correlation — can be NaN if either array has zero variance
+    # (e.g., all labels identical or all rewards identical)
     rho = np.corrcoef(clip_rewards, human_labels)[0, 1]
+    if np.isnan(rho):
+        return np.nan
 
-    # EPIC distance
+    # Clamp to [-1, 1] to guard against floating-point edge cases in sqrt
+    rho = np.clip(rho, -1.0, 1.0)
+
     epic = (1 / np.sqrt(2)) * np.sqrt(1 - rho)
-
     return epic
 
 

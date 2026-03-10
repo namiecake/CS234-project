@@ -5,15 +5,51 @@ Implements:
   - EPIC distance computation (Section 4.1, Appendix A)
   - Reward landscape visualization
   - Model scale comparison (Section 4.4)
+
+Usage:
+    # Compute EPIC distances and produce Figure 4a/4b
+    python src/evaluate.py --experiment scale \
+        --frames_path results/epic_eval/frames_kneeling.npz \
+        --labels_path results/epic_eval/labels_kneeling.npz
+
+    # Reward distribution histograms (Figure 7)
+    python src/evaluate.py --experiment distribution \
+        --frames_path results/epic_eval/frames_kneeling.npz \
+        --labels_path results/epic_eval/labels_kneeling.npz
 """
 
 import argparse
+import json
 import os
+import gc
+
 import numpy as np
+import torch
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from vlm_reward import CLIPRewardModel, CLIP_MODELS, compute_epic_distance
+
+
+def _encode_frames_batched(
+    rm: CLIPRewardModel,
+    frames: np.ndarray,
+    batch_size: int = 64,
+) -> torch.Tensor:
+    """Preprocess and encode all frames in batches to avoid OOM."""
+    all_embeds = []
+    n = len(frames)
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        batch = frames[start:end]
+        images = rm.preprocess_frames(batch)
+        embeds = rm.encode_images(images)
+        all_embeds.append(embeds)
+        if start % (batch_size * 5) == 0:
+            print(f"    Encoded {end}/{n} frames")
+    return torch.cat(all_embeds, dim=0)
 
 
 def compare_model_scales(
@@ -23,16 +59,14 @@ def compare_model_scales(
     human_labels: np.ndarray = None,
     alphas: List[float] = [0.0, 0.25, 0.5, 0.75, 1.0],
     output_dir: str = "results/plots",
+    device: str = "cuda",
+    batch_size: int = 64,
 ):
     """
     Compare CLIP models of different sizes as reward models (reproduces Figure 4).
 
-    Args:
-        frames: Pre-collected frames from humanoid rollouts, shape (N, H, W, 3)
-        human_labels: Binary labels (1 = goal state, 0 = not), shape (N,)
-        alphas: Regularization strengths to evaluate
-
-    If frames/labels not provided, generates synthetic data for testing.
+    Optimized: loads each model once, encodes all frames once per model,
+    then varies alpha on cached embeddings (4 forward passes instead of 20).
     """
     print("=" * 60)
     print("MODEL SCALE COMPARISON")
@@ -40,19 +74,15 @@ def compare_model_scales(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # If no real data, create placeholder
     if frames is None:
-        print("  No frames provided — using random frames for demonstration.")
-        print("  (Replace with real humanoid rollout frames for meaningful results)")
-        frames = np.random.randint(0, 255, (100, 224, 224, 3), dtype=np.uint8)
-        human_labels = np.random.binomial(1, 0.3, 100).astype(float)
+        print("  ERROR: No frames provided.")
+        print("  Run collect_frames.py first, then pass --frames_path and --labels_path.")
+        return
+
+    print(f"  Frames: {frames.shape[0]}, Labels: {int(human_labels.sum())} goal / "
+          f"{int((human_labels == 0).sum())} non-goal")
 
     models_to_test = ["RN50", "ViT-L-14", "ViT-H-14", "ViT-bigG-14"]
-
-    # ─── Figure 4a: EPIC distance vs alpha for each model ─────────────
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-    epic_results = {}  # {model_name: {alpha: epic_distance}}
     model_params = {
         "RN50": 102e6,
         "ViT-L-14": 428e6,
@@ -60,38 +90,74 @@ def compare_model_scales(
         "ViT-bigG-14": 2.5e9,
     }
 
+    epic_results = {}  # {model_name: {alpha_str: epic_distance}}
+
     for model_name in models_to_test:
-        print(f"\n  Testing {model_name}...")
+        print(f"\n  Loading {model_name}...")
         config = CLIP_MODELS[model_name]
         epic_results[model_name] = {}
 
-        for alpha in alphas:
-            try:
-                rm = CLIPRewardModel(
-                    goal_prompt=task_prompt,
-                    baseline_prompt=baseline_prompt,
-                    alpha=alpha,
-                    device="cuda",
-                    **config,
-                )
+        try:
+            rm = CLIPRewardModel(
+                goal_prompt=task_prompt,
+                baseline_prompt=baseline_prompt,
+                alpha=0.0,
+                device=device,
+                **config,
+            )
 
-                rewards = rm.reward_from_frames(frames)
+            # Encode all frames once for this model
+            print(f"  Encoding {len(frames)} frames...")
+            image_embeds = _encode_frames_batched(rm, frames, batch_size=batch_size)
+
+            # Evaluate each alpha using cached embeddings
+            for alpha in alphas:
+                rm.alpha = alpha
+                rewards = rm.compute_reward(image_embeds).cpu().numpy()
                 epic = compute_epic_distance(rewards, human_labels)
-                epic_results[model_name][alpha] = epic
-                print(f"    α={alpha:.2f}: EPIC distance = {epic:.4f}")
+                epic_results[model_name][str(alpha)] = epic
+                print(f"    α={alpha:.2f}: EPIC = {epic:.4f}")
 
-            except Exception as e:
-                print(f"    α={alpha:.2f}: FAILED ({e})")
-                epic_results[model_name][alpha] = None
+            # Free GPU memory before loading next model
+            del rm, image_embeds
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-    # Plot Figure 4a: EPIC vs alpha
-    ax = axes[0]
+        except Exception as e:
+            print(f"    FAILED: {e}")
+            for alpha in alphas:
+                epic_results[model_name][str(alpha)] = None
+
+    # Save results as JSON
+    results_path = os.path.join(output_dir, "epic_results.json")
+    with open(results_path, "w") as f:
+        json.dump(epic_results, f, indent=2)
+    print(f"\n  Saved EPIC results to {results_path}")
+
+    # ─── Plot Figure 4a + 4b ───────────────────────────────────────────
+    _plot_figure4(epic_results, model_params, alphas, output_dir)
+
+
+def _plot_figure4(
+    epic_results: Dict,
+    model_params: Dict,
+    alphas: List[float],
+    output_dir: str,
+):
+    """Generate the Figure 4a/4b plot from precomputed EPIC results."""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     markers = ["o", "s", "^", "v"]
+    models_to_test = list(epic_results.keys())
+
+    # Figure 4a: EPIC vs alpha
+    ax = axes[0]
     for (model_name, results), marker in zip(epic_results.items(), markers):
-        valid_alphas = [a for a, e in results.items() if e is not None]
-        valid_epics = [results[a] for a in valid_alphas]
+        valid_alphas = [a for a in alphas if results.get(str(a)) is not None]
+        valid_epics = [results[str(a)] for a in valid_alphas]
         if valid_epics:
-            ax.plot(valid_alphas, valid_epics, f"-{marker}", label=model_name, linewidth=2)
+            ax.plot(valid_alphas, valid_epics, f"-{marker}",
+                    label=model_name, linewidth=2, markersize=8)
 
     ax.set_xlabel("α (regularization strength)", fontsize=12)
     ax.set_ylabel("EPIC distance", fontsize=12)
@@ -99,26 +165,44 @@ def compare_model_scales(
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # Plot Figure 4b: EPIC vs model size (at alpha=0)
+    # Figure 4b: EPIC vs model size (at alpha=0)
     ax = axes[1]
     for model_name in models_to_test:
-        if 0.0 in epic_results[model_name] and epic_results[model_name][0.0] is not None:
+        epic_val = epic_results[model_name].get("0.0")
+        if epic_val is not None and model_name in model_params:
             params = model_params[model_name]
-            epic = epic_results[model_name][0.0]
-            ax.scatter(np.log10(params), epic, s=100, zorder=5)
-            ax.annotate(model_name, (np.log10(params), epic),
-                       textcoords="offset points", xytext=(5, 5), fontsize=9)
+            ax.scatter(np.log10(params), epic_val, s=100, zorder=5)
+            ax.annotate(model_name, (np.log10(params), epic_val),
+                        textcoords="offset points", xytext=(5, 5), fontsize=9)
 
-    ax.set_xlabel("log₁₀(number of parameters)", fontsize=12)
+    ax.set_xlabel("log\u2081\u2080(number of parameters)", fontsize=12)
     ax.set_ylabel("EPIC distance", fontsize=12)
-    ax.set_title("(b) Reward model performance\nby VLM size (α = 0)", fontsize=12)
+    ax.set_title("(b) Reward model performance\nby VLM size (\u03b1 = 0)", fontsize=12)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     save_path = os.path.join(output_dir, "model_scale_comparison.png")
     plt.savefig(save_path, dpi=150)
-    print(f"\n  Saved plot to {save_path}")
+    print(f"  Saved plot to {save_path}")
     plt.close()
+
+
+def plot_from_json(
+    results_path: str = "results/plots/epic_results.json",
+    output_dir: str = "results/plots",
+):
+    """Re-plot Figure 4 from saved JSON results (no GPU needed)."""
+    with open(results_path) as f:
+        epic_results = json.load(f)
+
+    model_params = {
+        "RN50": 102e6,
+        "ViT-L-14": 428e6,
+        "ViT-H-14": 986e6,
+        "ViT-bigG-14": 2.5e9,
+    }
+    alphas = [0.0, 0.25, 0.5, 0.75, 1.0]
+    _plot_figure4(epic_results, model_params, alphas, output_dir)
 
 
 def visualize_reward_distributions(
@@ -128,10 +212,11 @@ def visualize_reward_distributions(
     goal_prompt: str = "a humanoid robot kneeling",
     baseline_prompt: str = "a humanoid robot",
     output_dir: str = "results/plots",
+    device: str = "cuda",
+    batch_size: int = 64,
 ):
     """
     Reproduce Figure 7: Reward distributions for goal vs non-goal states.
-
     Shows how well CLIP separates goal states from non-goal states.
     """
     config = CLIP_MODELS[model_name]
@@ -139,20 +224,18 @@ def visualize_reward_distributions(
         goal_prompt=goal_prompt,
         baseline_prompt=baseline_prompt,
         alpha=0.0,
-        device="cuda",
+        device=device,
         **config,
     )
 
-    rewards = rm.reward_from_frames(frames)
+    image_embeds = _encode_frames_batched(rm, frames, batch_size=batch_size)
+    rewards = rm.compute_reward(image_embeds).cpu().numpy()
 
-    # Standardize rewards
     rewards_std = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
-
     goal_rewards = rewards_std[human_labels == 1]
     non_goal_rewards = rewards_std[human_labels == 0]
 
     fig, ax = plt.subplots(1, 1, figsize=(7, 4))
-
     ax.hist(goal_rewards, bins=30, alpha=0.6, color="steelblue", label="Goal state")
     ax.hist(non_goal_rewards, bins=30, alpha=0.6, color="salmon", label="Not goal state")
     ax.axvline(goal_rewards.mean(), color="steelblue", linestyle="--", linewidth=2,
@@ -172,87 +255,73 @@ def visualize_reward_distributions(
     plt.close()
 
 
-def collect_humanoid_frames_and_labels(
-    model_path: str = None,
-    n_episodes: int = 50,
-    episode_length: int = 100,
-    output_path: str = "results/eval_data.npz",
-):
-    """
-    Collect frames from a trained humanoid agent for EPIC distance evaluation.
+def _load_data(frames_path: str, labels_path: str):
+    """Load frames and labels from npz files."""
+    print(f"  Loading frames from {frames_path}")
+    frames = np.load(frames_path)["frames"]
+    print(f"    Shape: {frames.shape}, dtype: {frames.dtype}")
 
-    The paper (Appendix B) collects rollouts from trained checkpoints
-    and has a human label each frame as goal/non-goal.
+    print(f"  Loading labels from {labels_path}")
+    label_data = np.load(labels_path)
+    labels = label_data["labels"].astype(float)
+    labeled_mask = label_data["labeled_mask"]
+    n_labeled = labeled_mask.sum()
+    print(f"    Labeled: {n_labeled}/{len(labels)}, "
+          f"Goal: {int(labels[labeled_mask].sum())}, "
+          f"Non-goal: {int((labels[labeled_mask] == 0).sum())}")
 
-    For your project, you can:
-    1. Collect frames from random policy + trained policy
-    2. Manually label a subset (or label all if <500 frames)
-    3. Use the labels for EPIC distance computation
-    """
-    import gymnasium as gym
+    if not labeled_mask.all():
+        print(f"    WARNING: {(~labeled_mask).sum()} unlabeled frames — using only labeled ones")
+        frames = frames[labeled_mask]
+        labels = labels[labeled_mask]
 
-    env = gym.make(
-        "Humanoid-v4",
-        render_mode="rgb_array",
-        width=224,
-        height=224,
-        terminate_when_unhealthy=False,
-    )
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=episode_length)
-
-    if model_path:
-        from stable_baselines3 import SAC
-        agent = SAC.load(model_path)
-        print(f"  Loaded trained agent from {model_path}")
-    else:
-        agent = None
-        print("  Using random policy for frame collection")
-
-    all_frames = []
-    for ep in range(n_episodes):
-        obs, _ = env.reset()
-        for step in range(episode_length):
-            if agent:
-                action, _ = agent.predict(obs, deterministic=True)
-            else:
-                action = env.action_space.sample()
-
-            obs, _, terminated, truncated, _ = env.step(action)
-            frame = env.render()
-            all_frames.append(frame)
-
-            if terminated or truncated:
-                break
-
-    frames = np.array(all_frames)
-    env.close()
-
-    # Save frames for labeling
-    np.savez(output_path, frames=frames)
-    print(f"  Saved {len(frames)} frames to {output_path}")
-    print(f"  Next step: manually label frames as goal/non-goal states")
-
-    return frames
+    return frames, labels
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--experiment", choices=["scale", "distribution", "collect"],
-                        default="scale")
-    parser.add_argument("--model_path", type=str, default=None,
-                        help="Path to trained agent (for collect)")
+    parser = argparse.ArgumentParser(description="VLM-RM evaluation (EPIC + plots)")
+    parser.add_argument(
+        "--experiment",
+        choices=["scale", "distribution", "replot"],
+        default="scale",
+        help="scale: Figure 4a/4b, distribution: Figure 7, replot: re-plot from JSON",
+    )
+    parser.add_argument("--frames_path", type=str, default=None,
+                        help="Path to frames .npz (from collect_frames.py)")
+    parser.add_argument("--labels_path", type=str, default=None,
+                        help="Path to labels .npz (from label_frames.py)")
+    parser.add_argument("--results_json", type=str, default=None,
+                        help="Path to epic_results.json (for replot)")
     parser.add_argument("--output_dir", type=str, default="results/plots")
+    parser.add_argument("--batch_size", type=int, default=64,
+                        help="Batch size for CLIP image encoding")
+    parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
     if args.experiment == "scale":
-        compare_model_scales(output_dir=args.output_dir)
+        if not args.frames_path or not args.labels_path:
+            parser.error("--frames_path and --labels_path required for scale experiment")
+        frames, labels = _load_data(args.frames_path, args.labels_path)
+        compare_model_scales(
+            frames=frames,
+            human_labels=labels,
+            output_dir=args.output_dir,
+            device=args.device,
+            batch_size=args.batch_size,
+        )
 
     elif args.experiment == "distribution":
-        # Would need real frames and labels
-        print("Run with --experiment collect first to gather frames.")
-
-    elif args.experiment == "collect":
-        collect_humanoid_frames_and_labels(
-            model_path=args.model_path,
-            output_path="results/eval_data.npz",
+        if not args.frames_path or not args.labels_path:
+            parser.error("--frames_path and --labels_path required for distribution experiment")
+        frames, labels = _load_data(args.frames_path, args.labels_path)
+        visualize_reward_distributions(
+            frames=frames,
+            human_labels=labels,
+            output_dir=args.output_dir,
+            device=args.device,
+            batch_size=args.batch_size,
         )
+
+    elif args.experiment == "replot":
+        path = args.results_json or os.path.join(args.output_dir, "epic_results.json")
+        plot_from_json(results_path=path, output_dir=args.output_dir)

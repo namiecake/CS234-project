@@ -211,7 +211,7 @@ DEFAULT_HUMANOID_CAMERA_CONFIG: Dict[str, Any] = {
     "distance": 3.5,
     "lookat": np.array([0.0, 0.0, 1.0]),
     "elevation": -10.0,
-    "azimuth": 90.0,
+    "azimuth": 180.0,
 }
 
 
