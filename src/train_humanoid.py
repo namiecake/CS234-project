@@ -296,7 +296,6 @@ def evaluate_humanoid(
     # Load model
     model = SAC.load(model_path)
 
-    # Create environment with same textures/camera as training (no CLIP reward needed)
     env = HumanoidVLMWrapper(
         reward_model=None,
         render_width=224,
@@ -305,7 +304,21 @@ def evaluate_humanoid(
         episode_length=100,
     )
 
-    # Optionally create CLIP reward model for computing rewards on eval
+    inner_env = env.env
+    cam = inner_env.mujoco_renderer._viewers.get("rgb_array")
+    print(f"  camera_id on inner env: {inner_env.camera_id}")
+    print(f"  renderer default_cam_config: {inner_env.mujoco_renderer.default_cam_config}")
+    # Force one render to initialize the viewer, then inspect its camera
+    env.reset()
+    env.render()
+    viewer = inner_env.mujoco_renderer._viewers.get("rgb_array")
+    if viewer is not None:
+        print(f"  viewer.cam.azimuth:    {viewer.cam.azimuth}")
+        print(f"  viewer.cam.elevation:  {viewer.cam.elevation}")
+        print(f"  viewer.cam.distance:   {viewer.cam.distance}")
+        print(f"  viewer.cam.trackbodyid:{viewer.cam.trackbodyid}")
+        print(f"  viewer.cam.type:       {viewer.cam.type}")
+
     task_config = HUMANOID_TASKS[task]
     clip_config = CLIP_MODELS[clip_model_name]
     rm = CLIPRewardModel(
@@ -331,6 +344,17 @@ def evaluate_humanoid(
             frame = env.render()
             episode_frames.append(frame)
 
+            if step == 0:
+                import hashlib
+                frame_hash = hashlib.md5(frame.tobytes()).hexdigest()[:12]
+                print(f"  Frame 0 shape={frame.shape} dtype={frame.dtype} "
+                      f"hash={frame_hash} mean_pixel={frame.mean():.2f}")
+                # Save first frame directly as PNG for inspection
+                from PIL import Image as PILImage
+                debug_path = os.path.join(output_dir, f"debug_frame0_az{int(viewer.cam.azimuth)}.png")
+                PILImage.fromarray(frame).save(debug_path)
+                print(f"  Saved debug frame: {debug_path}")
+
             clip_reward = rm.reward_from_frames(frame)
             episode_rewards.append(clip_reward)
 
@@ -341,11 +365,14 @@ def evaluate_humanoid(
         all_rewards.append(mean_r)
         print(f"  Episode {ep+1}/{n_episodes}: mean CLIP reward = {mean_r:.4f}")
 
-        # Save video for first few episodes
         if save_video and ep < n_episodes:
             import imageio
             video_path = os.path.join(output_dir, f"episode_{ep}.mp4")
             imageio.mimsave(video_path, episode_frames, fps=30)
+            # Also save first frame as PNG for easy inspection
+            first_frame_path = os.path.join(output_dir, f"episode_{ep}_frame0.png")
+            imageio.imwrite(first_frame_path, episode_frames[0])
+            print(f"  Saved first frame to {first_frame_path}")
 
     print(f"\n  Overall mean CLIP reward: {np.mean(all_rewards):.4f} ± {np.std(all_rewards):.4f}")
     env.close()
