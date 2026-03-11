@@ -145,7 +145,7 @@ MODEL_STYLES = {
     "ViT-L-14":       {"color": "C1", "marker": "s"},
     "ViT-H-14":       {"color": "C2", "marker": "^"},
     "ViT-bigG-14":    {"color": "C3", "marker": "v"},
-    "SigLIP2-SO400M": {"color": "purple", "marker": "D"},
+    "SigLIP2-SO400M": {"color": "purple", "marker": "d"},
 }
 
 
