@@ -82,12 +82,13 @@ def compare_model_scales(
     print(f"  Frames: {frames.shape[0]}, Labels: {int(human_labels.sum())} goal / "
           f"{int((human_labels == 0).sum())} non-goal")
 
-    models_to_test = ["RN50", "ViT-L-14", "ViT-H-14", "ViT-bigG-14"]
+    models_to_test = ["RN50", "ViT-L-14", "ViT-H-14", "ViT-bigG-14", "SigLIP2-SO400M"]
     model_params = {
         "RN50": 102e6,
         "ViT-L-14": 428e6,
         "ViT-H-14": 986e6,
         "ViT-bigG-14": 2.5e9,
+        "SigLIP2-SO400M": 400e6,
     }
 
     epic_results = {}  # {model_name: {alpha_str: epic_distance}}
@@ -139,6 +140,15 @@ def compare_model_scales(
     _plot_figure4(epic_results, model_params, alphas, output_dir)
 
 
+MODEL_STYLES = {
+    "RN50":           {"color": "C0", "marker": "o"},
+    "ViT-L-14":       {"color": "C1", "marker": "s"},
+    "ViT-H-14":       {"color": "C2", "marker": "^"},
+    "ViT-bigG-14":    {"color": "C3", "marker": "v"},
+    "SigLIP2-SO400M": {"color": "purple", "marker": "D"},
+}
+
+
 def _plot_figure4(
     epic_results: Dict,
     model_params: Dict,
@@ -147,19 +157,19 @@ def _plot_figure4(
 ):
     """Generate the Figure 4a/4b plot from precomputed EPIC results."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    markers = ["o", "s", "^", "v"]
-    models_to_test = list(epic_results.keys())
 
     # Figure 4a: EPIC vs alpha
     ax = axes[0]
-    for (model_name, results), marker in zip(epic_results.items(), markers):
+    for model_name, results in epic_results.items():
+        style = MODEL_STYLES.get(model_name, {"color": "gray", "marker": "x"})
         valid_alphas = [a for a in alphas if results.get(str(a)) is not None]
         valid_epics = [results[str(a)] for a in valid_alphas]
         if valid_epics:
-            ax.plot(valid_alphas, valid_epics, f"-{marker}",
+            ax.plot(valid_alphas, valid_epics, linestyle="-",
+                    marker=style["marker"], color=style["color"],
                     label=model_name, linewidth=2, markersize=8)
 
-    ax.set_xlabel("α (regularization strength)", fontsize=12)
+    ax.set_xlabel("\u03b1 (regularization strength)", fontsize=12)
     ax.set_ylabel("EPIC distance", fontsize=12)
     ax.set_title("(a) Goal-baseline regularization\nfor different model sizes", fontsize=12)
     ax.legend()
@@ -167,11 +177,13 @@ def _plot_figure4(
 
     # Figure 4b: EPIC vs model size (at alpha=0)
     ax = axes[1]
-    for model_name in models_to_test:
+    for model_name in epic_results:
         epic_val = epic_results[model_name].get("0.0")
         if epic_val is not None and model_name in model_params:
+            style = MODEL_STYLES.get(model_name, {"color": "gray", "marker": "x"})
             params = model_params[model_name]
-            ax.scatter(np.log10(params), epic_val, s=100, zorder=5)
+            ax.scatter(np.log10(params), epic_val, s=100, zorder=5,
+                       color=style["color"], marker=style["marker"])
             ax.annotate(model_name, (np.log10(params), epic_val),
                         textcoords="offset points", xytext=(5, 5), fontsize=9)
 
@@ -200,6 +212,7 @@ def plot_from_json(
         "ViT-L-14": 428e6,
         "ViT-H-14": 986e6,
         "ViT-bigG-14": 2.5e9,
+        "SigLIP2-SO400M": 400e6,
     }
     alphas = [0.0, 0.25, 0.5, 0.75, 1.0]
     _plot_figure4(epic_results, model_params, alphas, output_dir)
