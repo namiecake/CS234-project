@@ -107,6 +107,7 @@ class BatchedCLIPRewardCallback(BaseCallback):
         env: HumanoidVLMWrapper,
         log_freq: int = 1000,
         save_dir: str = "results/checkpoints",
+        checkpoint_freq: int = 0,
         verbose: int = 0,
     ):
         super().__init__(verbose)
@@ -114,9 +115,11 @@ class BatchedCLIPRewardCallback(BaseCallback):
         self.env = env
         self.log_freq = log_freq
         self.save_dir = save_dir
+        self.checkpoint_freq = checkpoint_freq
         self.episode_rewards: list = []
         self.best_reward = -float("inf")
         self._rollout_buffer_start = 0
+        self._last_checkpoint_step = 0
 
     def _on_rollout_start(self) -> None:
         self._rollout_buffer_start = self.model.replay_buffer.pos
@@ -154,6 +157,13 @@ class BatchedCLIPRewardCallback(BaseCallback):
             self.best_reward = ep_mean
             os.makedirs(self.save_dir, exist_ok=True)
             self.model.save(os.path.join(self.save_dir, "best_model"))
+
+        if self.checkpoint_freq > 0 and self.num_timesteps - self._last_checkpoint_step >= self.checkpoint_freq:
+            self._last_checkpoint_step = self.num_timesteps
+            os.makedirs(self.save_dir, exist_ok=True)
+            path = os.path.join(self.save_dir, f"checkpoint_{self.num_timesteps}")
+            self.model.save(path)
+            print(f"  Saved checkpoint: {path}")
 
 
 def make_clip_reward_env(
@@ -248,11 +258,13 @@ def train_humanoid(
     # Callback: batched CLIP reward computation (Algorithm 1).
     # Receives a direct reference to the unwrapped env so it can pull
     # the frame buffer after each rollout.
+    checkpoint_freq = 128_000 if model_name == "ViT-bigG-14" else 0
     callback = BatchedCLIPRewardCallback(
         reward_model=rm,
         env=env,
         log_freq=1000,
         save_dir=os.path.join(run_dir, "checkpoints"),
+        checkpoint_freq=checkpoint_freq,
     )
 
     # Train!
@@ -305,21 +317,6 @@ def evaluate_humanoid(
         episode_length=100,
     )
 
-    inner_env = env.env
-    cam = inner_env.mujoco_renderer._viewers.get("rgb_array")
-    print(f"  camera_id on inner env: {inner_env.camera_id}")
-    print(f"  renderer default_cam_config: {inner_env.mujoco_renderer.default_cam_config}")
-    # Force one render to initialize the viewer, then inspect its camera
-    env.reset()
-    env.render()
-    viewer = inner_env.mujoco_renderer._viewers.get("rgb_array")
-    if viewer is not None:
-        print(f"  viewer.cam.azimuth:    {viewer.cam.azimuth}")
-        print(f"  viewer.cam.elevation:  {viewer.cam.elevation}")
-        print(f"  viewer.cam.distance:   {viewer.cam.distance}")
-        print(f"  viewer.cam.trackbodyid:{viewer.cam.trackbodyid}")
-        print(f"  viewer.cam.type:       {viewer.cam.type}")
-
     task_config = HUMANOID_TASKS[task]
     clip_config = CLIP_MODELS[clip_model_name]
     rm = CLIPRewardModel(
@@ -345,17 +342,6 @@ def evaluate_humanoid(
             frame = env.render()
             episode_frames.append(frame)
 
-            if step == 0:
-                import hashlib
-                frame_hash = hashlib.md5(frame.tobytes()).hexdigest()[:12]
-                print(f"  Frame 0 shape={frame.shape} dtype={frame.dtype} "
-                      f"hash={frame_hash} mean_pixel={frame.mean():.2f}")
-                # Save first frame directly as PNG for inspection
-                from PIL import Image as PILImage
-                debug_path = os.path.join(output_dir, f"debug_frame0_az{int(viewer.cam.azimuth)}.png")
-                PILImage.fromarray(frame).save(debug_path)
-                print(f"  Saved debug frame: {debug_path}")
-
             clip_reward = rm.reward_from_frames(frame)
             episode_rewards.append(clip_reward)
 
@@ -370,10 +356,6 @@ def evaluate_humanoid(
             import imageio
             video_path = os.path.join(output_dir, f"episode_{ep}.mp4")
             imageio.mimsave(video_path, episode_frames, fps=30)
-            # Also save first frame as PNG for easy inspection
-            first_frame_path = os.path.join(output_dir, f"episode_{ep}_frame0.png")
-            imageio.imwrite(first_frame_path, episode_frames[0])
-            print(f"  Saved first frame to {first_frame_path}")
 
     print(f"\n  Overall mean CLIP reward: {np.mean(all_rewards):.4f} ± {np.std(all_rewards):.4f}")
     env.close()
