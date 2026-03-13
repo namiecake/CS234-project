@@ -180,7 +180,7 @@ def make_clip_reward_env(
 def train_humanoid(
     task: str = "kneeling",
     model_name: str = "ViT-bigG-14",
-    alpha: float = 0.0,
+    alpha: float = 0.5,
     total_steps: int = 10_000_000,
     seed: int = 42,
     output_dir: str = "results",
@@ -281,6 +281,7 @@ def evaluate_humanoid(
     model_path: str,
     task: str = "kneeling",
     clip_model_name: str = "ViT-bigG-14",
+    alpha: float = 0.5,
     n_episodes: int = 100,
     save_video: bool = True,
     output_dir: str = "results/eval",
@@ -324,7 +325,7 @@ def evaluate_humanoid(
     rm = CLIPRewardModel(
         goal_prompt=task_config["goal_prompt"],
         baseline_prompt=task_config["baseline_prompt"],
-        alpha=0.0,
+        alpha=alpha,
         device="cuda" if torch.cuda.is_available() else "cpu",
         **clip_config,
     )
@@ -392,7 +393,10 @@ if __name__ == "__main__":
         default="ViT-bigG-14",
         help="CLIP model (ViT-bigG-14 required for humanoid success)",
     )
-    parser.add_argument("--alpha", type=float, default=0.0, help="Regularization strength")
+    parser.add_argument(
+        "--alpha", type=float, default=0.5,
+        help="Goal-baseline regularization strength (0=no reg, 1=full projection, default 0.5)",
+    )
     parser.add_argument("--total_steps", type=int, default=10_000_000, help="Training steps")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", type=str, default="results")
@@ -407,6 +411,7 @@ if __name__ == "__main__":
             model_path=args.eval_only,
             task=args.task,
             clip_model_name=args.model,
+            alpha=args.alpha,
             n_episodes=args.n_episodes,
         )
     else:
