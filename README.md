@@ -126,6 +126,14 @@ We ran **kneeling** and **splits** with two VLM backbones:
 | Kneeling | **SigLIP2-SO400M** | `webli` | — (extension) |
 | Splits | **SigLIP2-SO400M** | `webli` | — (extension) |
 
+We also ran the following. All goal baseline regularization is done with alpha = 0.5.
+1. ViT-bigG-14 kneeling with goal baseline regularization
+2. SigLIP kneeling with goal baseline regularization
+3. ViT-H-14 kneeling with goal baseline regularization
+4. ViT-H-14 kneeling with no goal baseline regularization
+5. SigLIP arms raised raised
+6. SigLIP hands on hips
+
 #### example tmux setup:
 ```bash
 # make a new tmux session
@@ -181,7 +189,7 @@ python train_humanoid.py --eval_only results/humanoid_kneeling_ViT-bigG-14_alpha
 
 This renders 100 episodes, computes mean CLIP reward, and saves videos. We downloaded the videos and manually labelled whether or not the humanoid achieves the task in the video, following the human-evaluation method in the paper. If the humanoid is completing the task for more than 50% of the video, then we count it as successful.
 
-### 4. Additional Notes: Ablations
+### 4. Ablations
 
 #### Goal-Baseline Regularization
 
@@ -205,7 +213,7 @@ python src/evaluate.py --experiment scale
 This evaluates RN50, ViT-L-14, ViT-H-14, and ViT-bigG-14 reward quality on
 collected frames.
 
-### 5. Extension: SigLIP2 as a Reward Model
+### 5. SigLIP2 as a Reward Model
 
 The paper's central claim is that VLM scale drives reward quality — bigger
 models yield better-shaped rewards. We test this by swapping in
@@ -214,7 +222,7 @@ vision-language model that did not exist when the paper was written. This
 directly probes whether improvements in VLM architecture and training data
 translate to better zero-shot reward signals.
 
-We ran SigLIP2 on the **kneeling** and **splits** tasks using the same
+We ran SigLIP2 on the **kneeling**, **splits**, **arms raised**, **hands on hips** tasks using the same
 hyperparameters as the ViT-bigG-14 experiments.
 
 ---
@@ -273,3 +281,5 @@ R_reg(s) = 1 - 0.5 * ||α * proj_L(s) + (1-α) * s - g||²
 # between CLIP rewards and binary human labels
 D_EPIC = (1/√2) * √(1 - ρ(R_CLIP, R_human))
 ```
+
+We also ran a prompt engineering analysis where we compared the reward signals of engineered prompts to the default given prompt.
