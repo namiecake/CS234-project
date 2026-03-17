@@ -49,7 +49,7 @@ conda activate vlmrm
 
 # Install dependencies
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install open_clip_torch gymnasium[mujoco] mujoco stable-baselines3
+pip install open_clip_torch gymnasium[mujoco] mujoco
 pip install matplotlib numpy scipy Pillow imageio imageio-ffmpeg wandb pygame transformers setuptools tensorboard
 
 # Need to use EGL for rendering with Mujoco

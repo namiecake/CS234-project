@@ -34,8 +34,8 @@ import time
 import numpy as np
 import torch
 import gymnasium as gym
-from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import BaseCallback
+from rl.sac import SAC
+from rl.callbacks import BaseCallback
 from pathlib import Path
 
 from vlm_reward import CLIPRewardModel, CLIP_MODELS

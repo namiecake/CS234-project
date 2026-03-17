@@ -27,7 +27,7 @@ import sys
 import time
 
 import numpy as np
-from stable_baselines3 import SAC
+from rl.sac import SAC
 
 from environments import HumanoidVLMWrapper
 

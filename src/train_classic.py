@@ -158,7 +158,7 @@ def experiment_train_cartpole_with_clip(
     This validates that the CLIP reward is actually learnable.
     The paper reports 100% success rate.
     """
-    from stable_baselines3 import DQN
+    from rl.dqn import DQN
     import gymnasium as gym
 
     print("=" * 60)
