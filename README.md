@@ -1,6 +1,6 @@
 # CS 234 Course Project
-### Reproducing and extending "Vision-Language Models are Zero-Shot Reward Models for RL": https://arxiv.org/abs/2310.12921
-Episodes found here! https://drive.google.com/drive/folders/1S9-zmc358XoAebbVrcVHhF8EWgPmAd-b?usp=sharing
+#### Reproducing and extending "Vision-Language Models are Zero-Shot Reward Models for RL": https://arxiv.org/abs/2310.12921
+### Episodes found here! https://drive.google.com/drive/folders/1S9-zmc358XoAebbVrcVHhF8EWgPmAd-b?usp=sharing
 
 ### Overview
 This project reproduces key results from Rocamonde et al. (ICLR 2024), which
